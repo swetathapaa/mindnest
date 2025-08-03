@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "743049506908",
+    "project_id": "mindnest-8383b",
+    "storage_bucket": "mindnest-8383b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:743049506908:android:cc8131865eb5f2ad32f699",
+        "android_client_info": {
+          "package_name": "com.example.mindnest"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "743049506908-0aalveokua18o0mn1vfavdvlbh7pcuqc.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC0sr28WmyKYJam6EWXcslsWTLTll4X9Is"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "743049506908-0aalveokua18o0mn1vfavdvlbh7pcuqc.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
