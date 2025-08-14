@@ -47,7 +47,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
       _isLoading = true;
     });
 
-    final doc = await _fs.collection('users').doc(_user.uid).get();
+    final doc = await _fs.collection('Users').doc(_user.uid).get();
     if (doc.exists) {
       final data = doc.data();
       if (data != null) {
@@ -74,7 +74,11 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
   }
 
   Future<void> _pickDob() async {
-    setState(() => _faceState = FaceState.typing);
+    setState(() {
+      _faceState = FaceState.typing;
+      _errorText = null; // Clear error when picking date
+    });
+
     final now = DateTime.now();
     final firstDate = DateTime(1900);
     final initial = _selectedDob ?? DateTime(now.year - 18, now.month, now.day);
@@ -88,7 +92,6 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
     if (picked != null) {
       setState(() {
         _selectedDob = picked;
-        _errorText = null;
       });
     }
   }
@@ -124,7 +127,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
       final name = _user.displayName ?? '';
       final email = _user.email ?? '';
 
-      await _fs.collection('users').doc(uid).set({
+      await _fs.collection('Users').doc(uid).set({
         'name': name,
         'email': email,
         'gender': _selectedGender,

@@ -30,11 +30,24 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _isLoading = false;
   String? _errorText;
 
-  String? _selectedGender;
+  String? _selectedGender; // start null
   DateTime? _selectedDob;
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final GoogleSignIn _googleSignIn = GoogleSignIn();
+
+  // Allowed gender options
+  static const List<String> allowedGenders = [
+    'Male',
+    'Female',
+    'Other',
+    'Prefer not to say',
+  ];
+
+  // GoogleSignIn instance with force account chooser
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+    scopes: ['email'],
+    signInOption: SignInOption.standard,
+  );
 
   @override
   void initState() {
@@ -184,8 +197,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
       final user = userCredential.user;
       if (user != null) {
-        // Save extra info to Firestore
-        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        // Save extra info to Firestore (fixed collection name 'Users')
+        await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
           'name': _nameCtrl.text.trim(),
           'email': _emailCtrl.text.trim(),
           'gender': _selectedGender,
@@ -203,10 +216,21 @@ class _SignUpScreenState extends State<SignUpScreen> {
         Navigator.pushReplacementNamed(context, '/preference'); // or dashboard
       }
     } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorText = e.message ?? 'Registration failed';
-        _faceState = FaceState.error;
-      });
+      if (e.code == 'email-already-in-use') {
+        await _auth.signOut(); // Sign out any partial sign-in
+        setState(() {
+          _errorText = 'Your account already exists. Redirecting to login...';
+          _faceState = FaceState.error;
+        });
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        Navigator.pushReplacementNamed(context, '/login');
+      } else {
+        setState(() {
+          _errorText = e.message ?? 'Registration failed';
+          _faceState = FaceState.error;
+        });
+      }
     } catch (e) {
       setState(() {
         _errorText = 'An error occurred, please try again.';
@@ -223,10 +247,14 @@ class _SignUpScreenState extends State<SignUpScreen> {
     setState(() {
       _errorText = null;
       _isLoading = true;
+      _faceState = FaceState.typing;
     });
 
     try {
+      // Force account chooser dialog:
+      await _googleSignIn.disconnect(); // Disconnect first to force re-select
       final googleUser = await _googleSignIn.signIn();
+
       if (googleUser == null) {
         setState(() {
           _errorText = 'Google sign-in cancelled';
@@ -243,8 +271,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         idToken: googleAuth.idToken,
       );
 
-      final userCredential =
-      await _auth.signInWithCredential(credential);
+      final userCredential = await _auth.signInWithCredential(credential);
 
       final user = userCredential.user;
 
@@ -260,13 +287,40 @@ class _SignUpScreenState extends State<SignUpScreen> {
       final isNewUser = userCredential.additionalUserInfo?.isNewUser ?? false;
 
       if (isNewUser) {
-        // New user - redirect to complete profile screen to get gender and dob
+        // Create Firestore user doc for new Google users
+        final userDocRef = FirebaseFirestore.instance.collection('Users').doc(user.uid);
+        final userDoc = await userDocRef.get();
+
+        if (!userDoc.exists) {
+          await userDocRef.set({
+            'name': user.displayName ?? '',
+            'email': user.email ?? '',
+            'gender': null, // null, no value yet
+            'dob': null,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+        }
+
         if (!mounted) return;
         Navigator.pushReplacementNamed(context, '/complete-profile', arguments: user);
       } else {
-        // Existing user - proceed to dashboard
         if (!mounted) return;
         Navigator.pushReplacementNamed(context, '/dashboard');
+      }
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'account-exists-with-different-credential') {
+        setState(() {
+          _errorText = 'An account already exists with the same email address but different sign-in credentials. Please login instead.';
+          _faceState = FaceState.error;
+        });
+        await Future.delayed(const Duration(seconds: 3));
+        if (!mounted) return;
+        Navigator.pushReplacementNamed(context, '/login');
+      } else {
+        setState(() {
+          _errorText = e.message ?? 'Google sign-in error';
+          _faceState = FaceState.error;
+        });
       }
     } catch (e) {
       setState(() {
@@ -358,24 +412,21 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         SizedBox(height: 16.h),
                         // Gender dropdown
                         DropdownButtonFormField<String>(
-                          value: _selectedGender,
+                          value: allowedGenders.contains(_selectedGender) ? _selectedGender : null,
+                          hint: const Text('Select Gender'),
                           decoration: const InputDecoration(
                             labelText: 'Gender',
                             prefixIcon: Icon(Icons.transgender_outlined),
                           ),
-                          items: const [
-                            DropdownMenuItem(value: 'Male', child: Text('Male')),
-                            DropdownMenuItem(value: 'Female', child: Text('Female')),
-                            DropdownMenuItem(value: 'Other', child: Text('Other')),
-                            DropdownMenuItem(
-                                value: 'Prefer not to say',
-                                child: Text('Prefer not to say')),
-                          ],
+                          items: allowedGenders
+                              .map((g) => DropdownMenuItem(value: g, child: Text(g)))
+                              .toList(),
                           onChanged: (v) {
                             setState(() {
                               _selectedGender = v;
                             });
                           },
+                          validator: (v) => v == null ? 'Select your gender' : null,
                         ),
                         SizedBox(height: 16.h),
                         // DOB picker
@@ -462,6 +513,33 @@ class _SignUpScreenState extends State<SignUpScreen> {
                             ),
                           ),
                         ),
+                        // The OR divider:
+                        SizedBox(height: 16.h),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Divider(
+                                thickness: 1,
+                                color: Colors.grey[400],
+                                endIndent: 12,
+                              ),
+                            ),
+                            Text(
+                              'OR',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Expanded(
+                              child: Divider(
+                                thickness: 1,
+                                color: Colors.grey[400],
+                                indent: 12,
+                              ),
+                            ),
+                          ],
+                        ),
                         SizedBox(height: 16.h),
                         // Google sign up button
                         SizedBox(
@@ -531,51 +609,30 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 }
 
-/// CharacterFace widget (from your original code)
+// Simple placeholder for your face character widget
 class CharacterFace extends StatelessWidget {
   final FaceState state;
   const CharacterFace({super.key, required this.state});
 
   @override
   Widget build(BuildContext context) {
-    String faceEmoji;
+    // Just for illustration: show different emojis for states
+    String emoji = '😐';
     switch (state) {
       case FaceState.typing:
-        faceEmoji = '😊';
+        emoji = '✍️';
         break;
       case FaceState.error:
-        faceEmoji = '😟';
+        emoji = '😟';
         break;
       case FaceState.success:
-        faceEmoji = '😄';
+        emoji = '😄';
         break;
       case FaceState.neutral:
       default:
-        faceEmoji = '🙂';
+        emoji = '😐';
         break;
     }
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 350),
-      curve: Curves.easeInOut,
-      width: 140.w,
-      height: 140.w,
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF8EE),
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.orange.withOpacity(0.08),
-            blurRadius: 16,
-            offset: const Offset(0, 8),
-          )
-        ],
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        faceEmoji,
-        style: TextStyle(fontSize: 52.sp),
-      ),
-    );
+    return Text(emoji, style: TextStyle(fontSize: 48));
   }
 }
