@@ -20,6 +20,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
+  final _dobCtrl = TextEditingController(); // <-- DOB controller
 
   final _nameFocus = FocusNode();
   final _emailFocus = FocusNode();
@@ -30,12 +31,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _isLoading = false;
   String? _errorText;
 
-  String? _selectedGender; // start null
+  String? _selectedGender;
   DateTime? _selectedDob;
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // Allowed gender options
   static const List<String> allowedGenders = [
     'Male',
     'Female',
@@ -43,7 +43,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
     'Prefer not to say',
   ];
 
-  // GoogleSignIn instance with force account chooser
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: ['email'],
     signInOption: SignInOption.standard,
@@ -76,12 +75,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 
   void _onTyping() {
-    if (_faceState != FaceState.typing) {
-      setState(() => _faceState = FaceState.typing);
-    }
-    if (_errorText != null) {
-      setState(() => _errorText = null);
-    }
+    if (_faceState != FaceState.typing) setState(() => _faceState = FaceState.typing);
+    if (_errorText != null) setState(() => _errorText = null);
   }
 
   String? _validateName(String? v) {
@@ -111,68 +106,44 @@ class _SignUpScreenState extends State<SignUpScreen> {
       initialDate: initial,
       firstDate: firstDate,
       lastDate: now,
-      builder: (context, child) => child ?? const SizedBox.shrink(),
     );
     if (picked != null) {
       setState(() {
         _selectedDob = picked;
+        _dobCtrl.text = _formatDob(picked); // ✅ immediately preview the selected date
       });
     }
   }
 
-  String _formatDob(DateTime dob) {
-    return '${dob.day.toString().padLeft(2, '0')}/${dob.month.toString().padLeft(2, '0')}/${dob.year}';
-  }
+  String _formatDob(DateTime dob) =>
+      '${dob.day.toString().padLeft(2, '0')}/${dob.month.toString().padLeft(2, '0')}/${dob.year}';
 
   Future<void> _submit() async {
+    if (_isLoading) return;
     setState(() {
       _errorText = null;
+      _isLoading = true;
+      _faceState = FaceState.typing;
     });
 
+    // Validation
     final nameError = _validateName(_nameCtrl.text);
     final emailError = _validateEmail(_emailCtrl.text);
     final passwordError = _validatePassword(_passwordCtrl.text);
     final confirmError = _validatePassword(_confirmCtrl.text);
-
-    if (nameError != null) {
+    if (nameError != null || emailError != null || passwordError != null || confirmError != null) {
       setState(() {
-        _errorText = nameError;
+        _errorText = nameError ?? emailError ?? passwordError ?? confirmError;
         _faceState = FaceState.error;
+        _isLoading = false;
       });
       return;
     }
-    if (emailError != null) {
+    if (_selectedGender == null || _selectedDob == null) {
       setState(() {
-        _errorText = emailError;
+        _errorText = _selectedGender == null ? 'Select your gender' : 'Select your date of birth';
         _faceState = FaceState.error;
-      });
-      return;
-    }
-    if (_selectedGender == null) {
-      setState(() {
-        _errorText = 'Select your gender';
-        _faceState = FaceState.error;
-      });
-      return;
-    }
-    if (_selectedDob == null) {
-      setState(() {
-        _errorText = 'Select your date of birth';
-        _faceState = FaceState.error;
-      });
-      return;
-    }
-    if (passwordError != null) {
-      setState(() {
-        _errorText = passwordError;
-        _faceState = FaceState.error;
-      });
-      return;
-    }
-    if (confirmError != null) {
-      setState(() {
-        _errorText = confirmError;
-        _faceState = FaceState.error;
+        _isLoading = false;
       });
       return;
     }
@@ -180,44 +151,40 @@ class _SignUpScreenState extends State<SignUpScreen> {
       setState(() {
         _errorText = 'Passwords do not match';
         _faceState = FaceState.error;
+        _isLoading = false;
       });
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-      _faceState = FaceState.typing;
-    });
-
     try {
+      // Step 1: Create Auth user
       final userCredential = await _auth.createUserWithEmailAndPassword(
         email: _emailCtrl.text.trim(),
         password: _passwordCtrl.text.trim(),
       );
-
       final user = userCredential.user;
-      if (user != null) {
-        // Save extra info to Firestore (fixed collection name 'Users')
-        await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
-          'name': _nameCtrl.text.trim(),
-          'email': _emailCtrl.text.trim(),
-          'gender': _selectedGender,
-          'dob': _selectedDob!.toIso8601String(),
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+      if (user == null) throw FirebaseAuthException(code: 'user-null', message: 'User creation failed');
 
-        setState(() {
-          _faceState = FaceState.success;
-        });
+      // Step 2: Store in Firestore (skip FCM for now)
+      await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+        'name': _nameCtrl.text.trim(),
+        'email': _emailCtrl.text.trim(),
+        'gender': _selectedGender,
+        'dob': Timestamp.fromDate(_selectedDob!),
+        'userType': 'general',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
-        await Future.delayed(const Duration(milliseconds: 400));
-        if (!mounted) return;
-
-        Navigator.pushReplacementNamed(context, '/preference'); // or dashboard
-      }
+      // Step 3: Show formal success message and redirect to login
+      setState(() {
+        _faceState = FaceState.success;
+        _errorText = 'Account created! Please login.';
+      });
+      await Future.delayed(const Duration(seconds: 2));
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/login');
     } on FirebaseAuthException catch (e) {
       if (e.code == 'email-already-in-use') {
-        await _auth.signOut(); // Sign out any partial sign-in
         setState(() {
           _errorText = 'Your account already exists. Redirecting to login...';
           _faceState = FaceState.error;
@@ -233,104 +200,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
       }
     } catch (e) {
       setState(() {
-        _errorText = 'An error occurred, please try again.';
+        _errorText = 'Something went wrong. Please try again.';
         _faceState = FaceState.error;
       });
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _handleGoogleSignUp() async {
-    setState(() {
-      _errorText = null;
-      _isLoading = true;
-      _faceState = FaceState.typing;
-    });
-
-    try {
-      // Force account chooser dialog:
-      await _googleSignIn.disconnect(); // Disconnect first to force re-select
-      final googleUser = await _googleSignIn.signIn();
-
-      if (googleUser == null) {
-        setState(() {
-          _errorText = 'Google sign-in cancelled';
-          _faceState = FaceState.error;
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final googleAuth = await googleUser.authentication;
-
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      final userCredential = await _auth.signInWithCredential(credential);
-
-      final user = userCredential.user;
-
-      if (user == null) {
-        setState(() {
-          _errorText = 'Google sign-in failed';
-          _faceState = FaceState.error;
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final isNewUser = userCredential.additionalUserInfo?.isNewUser ?? false;
-
-      if (isNewUser) {
-        // Create Firestore user doc for new Google users
-        final userDocRef = FirebaseFirestore.instance.collection('Users').doc(user.uid);
-        final userDoc = await userDocRef.get();
-
-        if (!userDoc.exists) {
-          await userDocRef.set({
-            'name': user.displayName ?? '',
-            'email': user.email ?? '',
-            'gender': null, // null, no value yet
-            'dob': null,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-        }
-
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, '/complete-profile', arguments: user);
-      } else {
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, '/dashboard');
-      }
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'account-exists-with-different-credential') {
-        setState(() {
-          _errorText = 'An account already exists with the same email address but different sign-in credentials. Please login instead.';
-          _faceState = FaceState.error;
-        });
-        await Future.delayed(const Duration(seconds: 3));
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, '/login');
-      } else {
-        setState(() {
-          _errorText = e.message ?? 'Google sign-in error';
-          _faceState = FaceState.error;
-        });
-      }
-    } catch (e) {
-      setState(() {
-        _errorText = 'Google sign-in error: $e';
-        _faceState = FaceState.error;
-      });
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() => _isLoading = false);
     }
   }
 
@@ -340,6 +214,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
     _confirmCtrl.dispose();
+    _dobCtrl.dispose(); // dispose DOB controller
     _nameFocus.dispose();
     _emailFocus.dispose();
     _passwordFocus.dispose();
@@ -349,290 +224,136 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    final secondary = Theme.of(context).colorScheme.secondary;
-
     return Scaffold(
       resizeToAvoidBottomInset: true,
       body: SafeArea(
         child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
           padding: EdgeInsets.symmetric(horizontal: 24.w),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: MediaQuery.of(context).size.height -
-                  MediaQuery.of(context).viewInsets.bottom,
-            ),
-            child: IntrinsicHeight(
-              child: Column(
-                children: [
-                  SizedBox(height: 40.h),
-                  CharacterFace(state: _faceState),
-                  SizedBox(height: 16.h),
-                  Text(
-                    'Create your MindNest',
-                    style: TextStyle(
-                      fontSize: 24.sp,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[900],
-                    ),
-                  ),
-                  SizedBox(height: 4.h),
-                  Text(
-                    'Sign up to get started',
-                    style: TextStyle(fontSize: 14.sp, color: Colors.grey[700]),
-                  ),
-                  SizedBox(height: 32.h),
-                  Form(
-                    key: _formKey,
-                    child: Column(
-                      children: [
-                        // Name
-                        TextFormField(
-                          controller: _nameCtrl,
-                          focusNode: _nameFocus,
-                          decoration: InputDecoration(
-                            labelText: 'Full Name',
-                            prefixIcon: const Icon(Icons.person_outline),
-                          ),
-                          validator: _validateName,
-                        ),
-                        SizedBox(height: 16.h),
-                        // Email
-                        TextFormField(
-                          controller: _emailCtrl,
-                          focusNode: _emailFocus,
-                          keyboardType: TextInputType.emailAddress,
-                          decoration: InputDecoration(
-                            labelText: 'Email',
-                            prefixIcon: const Icon(Icons.email_outlined),
-                          ),
-                          validator: _validateEmail,
-                        ),
-                        SizedBox(height: 16.h),
-                        // Gender dropdown
-                        DropdownButtonFormField<String>(
-                          value: allowedGenders.contains(_selectedGender) ? _selectedGender : null,
-                          hint: const Text('Select Gender'),
-                          decoration: const InputDecoration(
-                            labelText: 'Gender',
-                            prefixIcon: Icon(Icons.transgender_outlined),
-                          ),
-                          items: allowedGenders
-                              .map((g) => DropdownMenuItem(value: g, child: Text(g)))
-                              .toList(),
-                          onChanged: (v) {
-                            setState(() {
-                              _selectedGender = v;
-                            });
-                          },
-                          validator: (v) => v == null ? 'Select your gender' : null,
-                        ),
-                        SizedBox(height: 16.h),
-                        // DOB picker
-                        GestureDetector(
-                          onTap: _pickDob,
-                          child: AbsorbPointer(
-                            child: TextFormField(
-                              decoration: InputDecoration(
-                                labelText: 'Date of Birth',
-                                prefixIcon: const Icon(Icons.cake_outlined),
-                                hintText: _selectedDob != null
-                                    ? _formatDob(_selectedDob!)
-                                    : 'DD/MM/YYYY',
-                              ),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: 16.h),
-                        // Password
-                        TextFormField(
-                          controller: _passwordCtrl,
-                          focusNode: _passwordFocus,
-                          obscureText: true,
-                          decoration: InputDecoration(
-                            labelText: 'Password',
-                            prefixIcon: const Icon(Icons.lock_outline),
-                          ),
-                          validator: _validatePassword,
-                        ),
-                        SizedBox(height: 16.h),
-                        // Confirm password
-                        TextFormField(
-                          controller: _confirmCtrl,
-                          focusNode: _confirmFocus,
-                          obscureText: true,
-                          decoration: InputDecoration(
-                            labelText: 'Confirm Password',
-                            prefixIcon: const Icon(Icons.lock_outline),
-                          ),
-                          validator: _validatePassword,
-                        ),
-                        if (_errorText != null) ...[
-                          SizedBox(height: 8.h),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              _errorText!,
-                              style: TextStyle(
-                                color: Colors.red[400],
-                                fontSize: 12.sp,
-                              ),
-                            ),
-                          ),
-                        ],
-                        SizedBox(height: 28.h),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: _isLoading ? null : _submit,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: primary,
-                              padding: EdgeInsets.symmetric(vertical: 14.h),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14.r)),
-                              elevation: 4,
-                            ),
-                            child: _isLoading
-                                ? SizedBox(
-                              height: 18.h,
-                              width: 18.h,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                valueColor:
-                                AlwaysStoppedAnimation(Colors.white),
-                              ),
-                            )
-                                : Text(
-                              'Sign Up',
-                              style: TextStyle(
-                                fontSize: 16.sp,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                        // The OR divider:
-                        SizedBox(height: 16.h),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Divider(
-                                thickness: 1,
-                                color: Colors.grey[400],
-                                endIndent: 12,
-                              ),
-                            ),
-                            Text(
-                              'OR',
-                              style: TextStyle(
-                                color: Colors.grey[600],
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Expanded(
-                              child: Divider(
-                                thickness: 1,
-                                color: Colors.grey[400],
-                                indent: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 16.h),
-                        // Google sign up button
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            icon: Image.asset(
-                              'assets/images/google.png', // your Google icon asset
-                              height: 20.h,
-                              width: 20.h,
-                            ),
-                            label: Text(
-                              'Sign up with Google',
-                              style: TextStyle(
-                                fontSize: 14.sp,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            onPressed: _isLoading ? null : _handleGoogleSignUp,
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: Colors.grey),
-                              padding: EdgeInsets.symmetric(vertical: 14.h),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14.r),
-                              ),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: 12.h),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              "Already have an account? ",
-                              style: TextStyle(fontSize: 12.sp),
-                            ),
-                            GestureDetector(
-                              onTap: () {
-                                Navigator.pushReplacementNamed(context, '/login');
-                              },
-                              child: Text(
-                                'Login',
-                                style: TextStyle(
-                                  fontSize: 12.sp,
-                                  fontWeight: FontWeight.bold,
-                                  color: secondary,
-                                ),
-                              ),
-                            )
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    'MindNest • Mood & Music Companion',
-                    style: TextStyle(fontSize: 10.sp, color: Colors.grey[500]),
-                  ),
-                  SizedBox(height: 12.h),
-                ],
+          child: Column(
+            children: [
+              SizedBox(height: 40.h),
+              Text(
+                _faceState == FaceState.neutral
+                    ? '🙂'
+                    : _faceState == FaceState.typing
+                    ? '✍️'
+                    : _faceState == FaceState.error
+                    ? '😟'
+                    : '😃',
+                style: TextStyle(fontSize: 60.sp),
               ),
-            ),
+              SizedBox(height: 16.h),
+              Text('Create your MindNest',
+                  style: TextStyle(fontSize: 24.sp, fontWeight: FontWeight.bold)),
+              SizedBox(height: 4.h),
+              Text('Sign up to get started', style: TextStyle(fontSize: 14.sp)),
+              SizedBox(height: 32.h),
+              Form(
+                key: _formKey,
+                child: Column(
+                  children: [
+                    TextFormField(
+                      controller: _nameCtrl,
+                      focusNode: _nameFocus,
+                      decoration: const InputDecoration(
+                        labelText: 'Full Name',
+                        prefixIcon: Icon(Icons.person_outline),
+                      ),
+                      validator: _validateName,
+                    ),
+                    SizedBox(height: 16.h),
+                    TextFormField(
+                      controller: _emailCtrl,
+                      focusNode: _emailFocus,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Email',
+                        prefixIcon: Icon(Icons.email_outlined),
+                      ),
+                      validator: _validateEmail,
+                    ),
+                    SizedBox(height: 16.h),
+                    DropdownButtonFormField<String>(
+                      value: allowedGenders.contains(_selectedGender) ? _selectedGender : null,
+                      hint: const Text('Select Gender'),
+                      decoration: const InputDecoration(
+                        labelText: 'Gender',
+                        prefixIcon: Icon(Icons.transgender_outlined),
+                      ),
+                      items: allowedGenders
+                          .map((g) => DropdownMenuItem(value: g, child: Text(g)))
+                          .toList(),
+                      onChanged: (v) => setState(() => _selectedGender = v),
+                      validator: (v) => v == null ? 'Select your gender' : null,
+                    ),
+                    SizedBox(height: 16.h),
+                    TextFormField(
+                      controller: _dobCtrl,
+                      readOnly: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Date of Birth',
+                        prefixIcon: Icon(Icons.cake_outlined),
+                      ),
+                      onTap: _pickDob,
+                    ),
+                    SizedBox(height: 16.h),
+                    TextFormField(
+                      controller: _passwordCtrl,
+                      focusNode: _passwordFocus,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Password',
+                        prefixIcon: Icon(Icons.lock_outline),
+                      ),
+                      validator: _validatePassword,
+                    ),
+                    SizedBox(height: 16.h),
+                    TextFormField(
+                      controller: _confirmCtrl,
+                      focusNode: _confirmFocus,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Confirm Password',
+                        prefixIcon: Icon(Icons.lock_outline),
+                      ),
+                      validator: _validatePassword,
+                    ),
+                    if (_errorText != null)
+                      Padding(
+                        padding: EdgeInsets.only(top: 8.h),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            _errorText!,
+                            style: TextStyle(color: Colors.red[400], fontSize: 12.sp),
+                          ),
+                        ),
+                      ),
+                    SizedBox(height: 28.h),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _isLoading ? null : _submit,
+                        style: ElevatedButton.styleFrom(padding: EdgeInsets.symmetric(vertical: 14.h)),
+                        child: _isLoading
+                            ? SizedBox(
+                          height: 18.h,
+                          width: 18.h,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.2,
+                            valueColor: AlwaysStoppedAnimation(Colors.white),
+                          ),
+                        )
+                            : const Text('Sign Up'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
-  }
-}
-
-// Simple placeholder for your face character widget
-class CharacterFace extends StatelessWidget {
-  final FaceState state;
-  const CharacterFace({super.key, required this.state});
-
-  @override
-  Widget build(BuildContext context) {
-    // Just for illustration: show different emojis for states
-    String emoji = '😐';
-    switch (state) {
-      case FaceState.typing:
-        emoji = '✍️';
-        break;
-      case FaceState.error:
-        emoji = '😟';
-        break;
-      case FaceState.success:
-        emoji = '😄';
-        break;
-      case FaceState.neutral:
-      default:
-        emoji = '😐';
-        break;
-    }
-    return Text(emoji, style: TextStyle(fontSize: 48));
   }
 }

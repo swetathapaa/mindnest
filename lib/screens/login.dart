@@ -3,8 +3,8 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
-// Import your reference/dashboard screens
 import 'recommendation_screen.dart';
 import 'dashboard.dart';
 
@@ -44,7 +44,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void _updateFaceOnFocusChange() {
     if (_emailFocus.hasFocus || _passwordFocus.hasFocus) {
       setState(() => _faceState = FaceState.typing);
-    } else if (_errorText != null) {
+    } else if (_errorText != null && _errorText!.isNotEmpty) {
       setState(() => _faceState = FaceState.error);
     } else {
       setState(() => _faceState = FaceState.neutral);
@@ -52,12 +52,8 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _onTyping() {
-    if (_faceState != FaceState.typing) {
-      setState(() => _faceState = FaceState.typing);
-    }
-    if (_errorText != null) {
-      setState(() => _errorText = null);
-    }
+    if (_faceState != FaceState.typing) setState(() => _faceState = FaceState.typing);
+    if (_errorText != null && _errorText!.isNotEmpty) setState(() => _errorText = null);
   }
 
   String? _validateEmail(String? v) {
@@ -72,87 +68,69 @@ class _LoginScreenState extends State<LoginScreen> {
     return null;
   }
 
-  Future<void> _redirectBasedOnLatestEntry() async {
-    final user = _auth.currentUser;
-    if (user == null) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
-      );
-      return;
-    }
+  Future<DocumentSnapshot<Map<String, dynamic>>?> _getUserDocByEmail(String email) async {
+    final query = await _firestore.collection('Users').where('email', isEqualTo: email).limit(1).get();
+    if (query.docs.isEmpty) return null;
+    return query.docs.first;
+  }
 
+  Future<void> _saveFcmToken(String userId) async {
     try {
-      final entriesRef = _firestore
-          .collection('users')
-          .doc(user.uid)
-          .collection('entries');
-
-      final querySnapshot = await entriesRef
-          .orderBy('createdAt', descending: true)
-          .limit(1)
-          .get();
-
-      if (querySnapshot.docs.isEmpty) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const DashboardScreen()),
-        );
-        return;
+      String? fcmToken = await FirebaseMessaging.instance.getToken();
+      if (fcmToken != null) {
+        await _firestore.collection('Users').doc(userId).update({'fcmToken': fcmToken});
       }
+    } catch (e) {
+      print('Error saving FCM token: $e');
+    }
+  }
 
-      final docSnapshot = querySnapshot.docs.first;
-      final doc = docSnapshot.data();
-      final createdAtValue = doc['createdAt'];
+  Future<void> _redirectAfterLogin(String userId) async {
+    final entryRef = _firestore
+        .collection('Users')
+        .doc(userId)
+        .collection('Entry')
+        .orderBy('createdAt', descending: true)
+        .limit(1);
 
-      if (createdAtValue == null || createdAtValue is! Timestamp) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const DashboardScreen()),
-        );
-        return;
-      }
+    final snapshot = await entryRef.get();
+    String? latestEntryId;
+    if (snapshot.docs.isNotEmpty) {
+      final lastEntry = snapshot.docs.first;
+      latestEntryId = lastEntry.id;
+      final createdAt = lastEntry['createdAt'].toDate();
+      final difference = DateTime.now().difference(createdAt);
 
-      final DateTime createdAt = createdAtValue.toDate();
-      final DateTime now = DateTime.now();
-      final difference = now.difference(createdAt);
-
-      if (difference.inMinutes <= 15) {
+      if (difference.inMinutes < 15) {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => RecommendationScreen(
-              entryId: docSnapshot.id,
-            ),
+            builder: (_) => RecommendationScreen(entryId: latestEntryId ?? ''),
           ),
         );
-      } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const DashboardScreen()),
-        );
+        return;
       }
-    } catch (e, st) {
-      debugPrint('Error checking latest entry: $e\n$st');
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
-      );
     }
-  }
 
-  Future<bool> _checkUserDocExists(String uid) async {
-    final userDoc = await _firestore.collection('Users').doc(uid).get();
-    return userDoc.exists;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => DashboardScreen()),
+    );
   }
 
   Future<void> _signInWithEmailPassword() async {
-    if (!_formKey.currentState!.validate()) return;
+    final isValid = _formKey.currentState!.validate();
+
+    if (!isValid) {
+      // Show error emoji if validation fails
+      setState(() => _faceState = FaceState.error);
+      return;
+    }
 
     setState(() {
-      _errorText = null;
-      _isLoading = true;
       _faceState = FaceState.typing;
+      _isLoading = true;
+      _errorText = null;
     });
 
     try {
@@ -162,37 +140,107 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       final user = userCredential.user;
-      if (user == null) {
-        throw FirebaseAuthException(
-            code: 'user-not-found', message: 'User not found after sign-in');
-      }
+      if (user == null) throw FirebaseAuthException(code: 'user-not-found');
 
-      final userDocExists = await _checkUserDocExists(user.uid);
-
-      if (!userDocExists) {
+      final userDoc = await _getUserDocByEmail(user.email!);
+      if (userDoc == null) {
         await _auth.signOut();
-
         setState(() {
-          _errorText = 'No account found. Please create an account.';
+          _errorText = 'No account found in Firestore. Please create an account.';
           _faceState = FaceState.error;
           _isLoading = false;
         });
         return;
       }
 
+      await _saveFcmToken(user.uid);
+
       setState(() => _faceState = FaceState.success);
       await Future.delayed(const Duration(milliseconds: 400));
       if (!mounted) return;
-      await _redirectBasedOnLatestEntry();
+
+      await _redirectAfterLogin(user.uid);
     } on FirebaseAuthException catch (e) {
       setState(() {
-        _errorText = 'FirebaseAuth error: ${e.code} - ${e.message}';
+        String msg;
+        switch (e.code) {
+          case 'user-not-found':
+            msg = 'No user found with this email.';
+            break;
+          case 'wrong-password':
+            msg = 'Incorrect password.';
+            break;
+          case 'invalid-email':
+            msg = 'Invalid email.';
+            break;
+          default:
+            msg = e.message ?? 'Login failed';
+        }
+        _errorText = msg;
         _faceState = FaceState.error;
         _isLoading = false;
       });
     } catch (e) {
       setState(() {
-        _errorText = 'Sign-in failed: $e';
+        _errorText = 'Login failed: $e';
+        _faceState = FaceState.error;
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _signInWithGoogle() async {
+    setState(() => _faceState = FaceState.typing);
+    setState(() => _isLoading = true);
+
+    try {
+      await _googleSignIn.signOut();
+      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) {
+        setState(() {
+          _isLoading = false;
+          _faceState = FaceState.neutral;
+        });
+        return;
+      }
+
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      final userCredential = await _auth.signInWithCredential(credential);
+      final user = userCredential.user;
+      if (user == null) throw FirebaseAuthException(code: 'user-not-found');
+
+      DocumentSnapshot<Map<String, dynamic>>? userDoc = await _getUserDocByEmail(user.email!);
+      if (userDoc == null) {
+        final newDocRef = await _firestore.collection('Users').add({
+          'email': user.email,
+          'name': user.displayName ?? '',
+          'createdAt': FieldValue.serverTimestamp(),
+          'userType': 'general',
+        });
+        userDoc = await newDocRef.get();
+      }
+
+      await _saveFcmToken(user.uid);
+
+      setState(() => _faceState = FaceState.success);
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (!mounted) return;
+
+      await _redirectAfterLogin(user.uid);
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        _errorText = e.message ?? 'Google sign-in failed';
+        _faceState = FaceState.error;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _errorText = 'Google sign-in failed: $e';
         _faceState = FaceState.error;
         _isLoading = false;
       });
@@ -221,83 +269,9 @@ class _LoginScreenState extends State<LoginScreen> {
         _faceState = FaceState.success;
         _isLoading = false;
       });
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorText = e.message ?? 'Failed to send reset email';
-        _faceState = FaceState.error;
-        _isLoading = false;
-      });
     } catch (e) {
       setState(() {
         _errorText = 'Failed to send reset email';
-        _faceState = FaceState.error;
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _signInWithGoogle() async {
-    setState(() {
-      _errorText = null;
-      _isLoading = true;
-      _faceState = FaceState.typing;
-    });
-
-    try {
-      await _googleSignIn.signOut();
-
-      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
-      if (googleUser == null) {
-        setState(() {
-          _isLoading = false;
-          _faceState = FaceState.neutral;
-        });
-        return;
-      }
-
-      final GoogleSignInAuthentication googleAuth =
-      await googleUser.authentication;
-
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      final userCredential =
-      await _auth.signInWithCredential(credential);
-
-      final user = userCredential.user;
-      if (user == null) {
-        throw FirebaseAuthException(
-            code: 'user-not-found', message: 'User not found after Google sign-in');
-      }
-
-      final userDocExists = await _checkUserDocExists(user.uid);
-
-      if (!userDocExists) {
-        await _auth.signOut();
-
-        setState(() {
-          _errorText = 'No account found. Please create an account.';
-          _faceState = FaceState.error;
-          _isLoading = false;
-        });
-        return;
-      }
-
-      setState(() => _faceState = FaceState.success);
-      await Future.delayed(const Duration(milliseconds: 400));
-      if (!mounted) return;
-      await _redirectBasedOnLatestEntry();
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorText = e.message ?? 'Google sign-in failed';
-        _faceState = FaceState.error;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _errorText = 'Google sign-in failed';
         _faceState = FaceState.error;
         _isLoading = false;
       });
@@ -315,10 +289,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary; // #5B9A8B Muted Teal
-    final secondary = Theme.of(context).colorScheme.secondary; // #E6C79C Soft Gold
-    final background = const Color(0xFFFEFCF8); // Light Cream
-    final cardColor = const Color(0xFFF8F6F3); // Pearl White
+    final primary = Theme.of(context).colorScheme.primary;
+    final secondary = Theme.of(context).colorScheme.secondary;
+    final background = const Color(0xFFFEFCF8);
+    final cardColor = const Color(0xFFF8F6F3);
 
     return Scaffold(
       backgroundColor: background,
@@ -338,23 +312,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   SizedBox(height: 40.h),
                   CharacterFace(state: _faceState),
                   SizedBox(height: 16.h),
-                  Text(
-                    'Welcome to MindNest',
-                    style: TextStyle(
-                      fontSize: 24.sp,
-                      fontWeight: FontWeight.bold,
-                      color:
-                      Theme.of(context).textTheme.bodyLarge?.color ?? Colors.black87,
-                    ),
-                  ),
+                  Text('Welcome to MindNest',
+                      style: TextStyle(
+                          fontSize: 24.sp,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87)),
                   SizedBox(height: 4.h),
-                  Text(
-                    'Log in to continue',
-                    style: TextStyle(
-                      fontSize: 14.sp,
-                      color: secondary,
-                    ),
-                  ),
+                  Text('Log in to continue',
+                      style: TextStyle(fontSize: 14.sp, color: secondary)),
                   SizedBox(height: 32.h),
                   Form(
                     key: _formKey,
@@ -370,13 +335,10 @@ class _LoginScreenState extends State<LoginScreen> {
                             filled: true,
                             fillColor: cardColor,
                             border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14.r),
-                              borderSide: BorderSide.none,
-                            ),
+                                borderRadius: BorderRadius.circular(14.r),
+                                borderSide: BorderSide.none),
                           ),
                           validator: _validateEmail,
-                          style: TextStyle(
-                              color: Theme.of(context).textTheme.bodyMedium?.color),
                         ),
                         SizedBox(height: 16.h),
                         TextFormField(
@@ -389,13 +351,10 @@ class _LoginScreenState extends State<LoginScreen> {
                             filled: true,
                             fillColor: cardColor,
                             border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14.r),
-                              borderSide: BorderSide.none,
-                            ),
+                                borderRadius: BorderRadius.circular(14.r),
+                                borderSide: BorderSide.none),
                           ),
                           validator: _validatePassword,
-                          style: TextStyle(
-                              color: Theme.of(context).textTheme.bodyMedium?.color),
                         ),
                         if (_errorText != null) ...[
                           SizedBox(height: 8.h),
@@ -403,10 +362,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             alignment: Alignment.centerLeft,
                             child: Text(
                               _errorText!,
-                              style: TextStyle(
-                                color: Colors.red[400],
-                                fontSize: 12.sp,
-                              ),
+                              style: TextStyle(color: Colors.red[400], fontSize: 12.sp),
                             ),
                           ),
                         ],
@@ -424,87 +380,70 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             child: _isLoading
                                 ? SizedBox(
-                              height: 18.h,
-                              width: 18.h,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                valueColor:
-                                const AlwaysStoppedAnimation(Colors.white),
-                              ),
-                            )
-                                : Text(
-                              'Login',
-                              style: TextStyle(
-                                fontSize: 16.sp,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
+                                height: 18.h,
+                                width: 18.h,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    valueColor: const AlwaysStoppedAnimation(Colors.white)))
+                                : Text('Login',
+                                style: TextStyle(
+                                    fontSize: 16.sp,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white)),
                           ),
                         ),
                         SizedBox(height: 12.h),
                         GestureDetector(
                           onTap: _isLoading ? null : _forgotPassword,
-                          child: Text(
-                            'Forgot Password?',
-                            style: TextStyle(
-                              fontSize: 14.sp,
-                              color: secondary,
-                              fontWeight: FontWeight.w600,
+                          child: Text('Forgot Password?',
+                              style: TextStyle(
+                                  fontSize: 14.sp,
+                                  color: secondary,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                        SizedBox(height: 24.h),
+                        Row(
+                          children: [
+                            Expanded(child: Divider(thickness: 1)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                              child: Text('OR', style: TextStyle(color: Colors.grey[600])),
                             ),
-                          ),
+                            Expanded(child: Divider(thickness: 1)),
+                          ],
                         ),
-                        SizedBox(height: 8.h),
-                        Text(
-                          'Or',
-                          style: TextStyle(fontSize: 14.sp, color: Colors.grey[600]),
-                        ),
-                        SizedBox(height: 8.h),
+                        SizedBox(height: 16.h),
                         SizedBox(
                           width: double.infinity,
                           child: OutlinedButton.icon(
                             onPressed: _isLoading ? null : _signInWithGoogle,
-                            icon: Image.asset(
-                              'assets/images/google.png',
-                              height: 22.h,
-                              width: 22.h,
-                            ),
-                            label: Text(
-                              'Continue with Google',
-                              style: TextStyle(
-                                fontSize: 16.sp,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black87,
-                              ),
-                            ),
+                            icon: Image.asset('assets/images/google.png', height: 22.h, width: 22.h),
+                            label: Text('Continue with Google',
+                                style: TextStyle(
+                                    fontSize: 16.sp,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black87)),
                             style: OutlinedButton.styleFrom(
-                              padding: EdgeInsets.symmetric(vertical: 14.h),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14.r)),
-                              side: BorderSide(color: Colors.grey.shade400),
-                            ),
+                                padding: EdgeInsets.symmetric(vertical: 14.h),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14.r)),
+                                side: BorderSide(color: Colors.grey.shade400)),
                           ),
                         ),
                         SizedBox(height: 12.h),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(
-                              "Don't have an account? ",
-                              style: TextStyle(fontSize: 12.sp),
-                            ),
+                            Text("Don't have an account? ", style: TextStyle(fontSize: 12.sp)),
                             GestureDetector(
                               onTap: () {
                                 Navigator.pushNamed(context, '/signup');
                               },
-                              child: Text(
-                                'Sign up',
-                                style: TextStyle(
-                                  fontSize: 12.sp,
-                                  fontWeight: FontWeight.bold,
-                                  color: secondary,
-                                ),
-                              ),
+                              child: Text('Sign up',
+                                  style: TextStyle(
+                                      fontSize: 12.sp,
+                                      fontWeight: FontWeight.bold,
+                                      color: secondary)),
                             )
                           ],
                         ),
@@ -512,10 +451,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                   const Spacer(),
-                  Text(
-                    'MindNest • Mood & Music Companion',
-                    style: TextStyle(fontSize: 10.sp, color: Colors.grey[500]),
-                  ),
+                  Text('MindNest • Mood & Music Companion',
+                      style: TextStyle(fontSize: 10.sp, color: Colors.grey[500])),
                   SizedBox(height: 12.h),
                 ],
               ),
@@ -536,7 +473,7 @@ class CharacterFace extends StatelessWidget {
     String faceEmoji;
     switch (state) {
       case FaceState.typing:
-        faceEmoji = '😊';
+        faceEmoji = '✍️';
         break;
       case FaceState.error:
         faceEmoji = '😟';
@@ -556,21 +493,12 @@ class CharacterFace extends StatelessWidget {
       width: 140.w,
       height: 140.w,
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F6F3), // Pearl White circle background
+        color: const Color(0xFFF8F6F3),
         shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.teal.withOpacity(0.1), // subtle teal shadow
-            blurRadius: 16,
-            offset: const Offset(0, 8),
-          )
-        ],
+        boxShadow: [BoxShadow(color: Colors.teal.withOpacity(0.1), blurRadius: 16, offset: const Offset(0, 8))],
       ),
       alignment: Alignment.center,
-      child: Text(
-        faceEmoji,
-        style: TextStyle(fontSize: 52.sp),
-      ),
+      child: Text(faceEmoji, style: TextStyle(fontSize: 52.sp)),
     );
   }
 }

@@ -21,7 +21,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _displayName = '';
   bool _isSubmitting = false;
 
-  final Map<String, IconData> moodIconData = {
+  List<String> _moodsFromFirestore = [];
+  final Map<String, IconData> _predefinedMoodIcons = {
     'Calm': Icons.self_improvement,
     'Happy': Icons.sentiment_very_satisfied,
     'Energetic': Icons.flash_on,
@@ -37,11 +38,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     'Confused': Icons.help_outline,
     'Very Self-Critical': Icons.person_off,
   };
+  final IconData _defaultMoodIcon = Icons.emoji_emotions;
 
   @override
   void initState() {
     super.initState();
     _fetchDisplayName();
+    _fetchMoods();
+    _checkLastEntryAndRedirect();
   }
 
   Future<void> _fetchDisplayName() async {
@@ -55,10 +59,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('Users')
-          .doc(user.uid)
-          .get();
+      final snapshot =
+      await FirebaseFirestore.instance.collection('Users').doc(user.uid).get();
 
       if (snapshot.exists) {
         final data = snapshot.data();
@@ -75,20 +77,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       final email = user.email ?? '';
       setState(() {
-        _displayName = email.contains('@')
-            ? email.split('@')[0]
-            : (email.isNotEmpty ? email : 'there');
+        _displayName = email.contains('@') ? email.split('@')[0] : 'there';
         _loadingUser = false;
       });
     } catch (_) {
       final email = user.email ?? '';
       setState(() {
-        _displayName = email.contains('@')
-            ? email.split('@')[0]
-            : (email.isNotEmpty ? email : 'there');
+        _displayName = email.contains('@') ? email.split('@')[0] : 'there';
         _loadingUser = false;
       });
     }
+  }
+
+  Future<void> _fetchMoods() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance.collection('Moods').get();
+      setState(() {
+        _moodsFromFirestore =
+            snapshot.docs.map((doc) => doc['name'].toString()).toList();
+      });
+    } catch (e) {
+      debugPrint('Failed to fetch moods: $e');
+    }
+  }
+
+  IconData _getMoodIcon(String mood) {
+    return _predefinedMoodIcons[mood] ?? _defaultMoodIcon;
   }
 
   void toggleMood(String mood) {
@@ -101,10 +115,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  Future<void> _checkLastEntryAndRedirect() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final query = await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .collection('Entries')
+        .orderBy('CreatedAt', descending: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) return;
+
+    final lastEntry = query.docs.first;
+    final lastTime = (lastEntry['CreatedAt'] as Timestamp?)?.toDate();
+    if (lastTime == null) return;
+
+    final diff = DateTime.now().difference(lastTime);
+    if (diff.inMinutes < 15) {
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => RecommendationScreen(entryId: lastEntry.id),
+        ),
+      );
+    }
+  }
+
   Future<void> submit() async {
     if (selectedMoods.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select at least one mood')),
+      );
+      return;
+    }
+
+    final canSubmit = await _canSubmitEntry();
+    if (!canSubmit) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'You can only submit one entry every 15 minutes. Try later.')),
       );
       return;
     }
@@ -117,7 +171,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final journalText = _journalController.text.trim();
 
     try {
-      final uri = Uri.parse('http://10.0.2.2:3000/getMoodResponse'); // Change as needed
+      final uri = Uri.parse('http://10.0.2.2:3000/getMoodResponse');
       final resp = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
@@ -159,12 +213,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
         if (!mounted) return;
 
+        // Correct push with MaterialPageRoute
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => RecommendationScreen(
-              entryId: entryRef.id,
-            ),
+            builder: (_) => RecommendationScreen(entryId: entryRef.id),
           ),
         );
       }
@@ -181,6 +234,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<bool> _canSubmitEntry() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return true;
+
+    final query = await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .collection('Entries')
+        .orderBy('CreatedAt', descending: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) return true;
+
+    final lastEntry = query.docs.first;
+    final lastTime = (lastEntry['CreatedAt'] as Timestamp?)?.toDate();
+    if (lastTime == null) return true;
+
+    final diff = DateTime.now().difference(lastTime);
+    return diff.inMinutes >= 15;
+  }
+
   @override
   void dispose() {
     _journalController.dispose();
@@ -189,12 +264,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final background = const Color(0xFFFEFCF8); // Light Cream
-    final primaryText = const Color(0xFF2D4A42); // Dark Teal
-    final secondaryText = const Color(0xFF5B9A8B); // Muted Teal
-    final cardColor = const Color(0xFFF8F6F3); // Pearl White
-    final accentColor = const Color(0xFFE6C79C); // Soft Gold
-    final buttonColor = const Color(0xFF5B9A8B); // Muted Teal
+    final background = const Color(0xFFFEFCF8);
+    final primaryText = const Color(0xFF2D4A42);
+    final secondaryText = const Color(0xFF5B9A8B);
+    final cardColor = const Color(0xFFF8F6F3);
+    final accentColor = const Color(0xFFE6C79C);
+    final buttonColor = const Color(0xFF5B9A8B);
+
+    final displayName = _displayName.split(' ').first;
+    final appBarTitle = displayName.length > 12
+        ? 'Your space to breathe, ${displayName.substring(0, 12)}...'
+        : 'Your space to breathe, $displayName';
 
     return Scaffold(
       backgroundColor: background,
@@ -211,7 +291,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         )
             : Text(
-          'Your space to breathe, ${_displayName.split(' ').first}',
+          appBarTitle,
           style: const TextStyle(
             fontWeight: FontWeight.bold,
             color: Colors.white,
@@ -232,150 +312,168 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Let’s check in—how’s your day been so far?',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: primaryText,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                // Horizontal moods scroll
-                SizedBox(
-                  height: 110,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: moodIconData.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 12),
-                    itemBuilder: (context, index) {
-                      final mood = moodIconData.keys.elementAt(index);
-                      final icon = moodIconData[mood]!;
-                      final selected = selectedMoods.contains(mood);
-                      return GestureDetector(
-                        onTap: () => toggleMood(mood),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          width: 80,
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: selected ? accentColor.withOpacity(0.2) : cardColor,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: selected ? accentColor : Colors.grey.shade300,
-                              width: selected ? 2 : 1,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.04),
-                                blurRadius: 8,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(icon,
-                                  size: 32,
-                                  color: selected ? accentColor : secondaryText),
-                              const SizedBox(height: 6),
-                              Text(
-                                mood,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: selected ? accentColor : secondaryText,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                Text(
-                  'Your thoughts & feelings',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: primaryText,
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                Container(
-                  height: 200,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: cardColor,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.03),
-                        blurRadius: 12,
-                        offset: const Offset(0, 6),
-                      )
-                    ],
-                  ),
-                  child: TextField(
-                    controller: _journalController,
-                    maxLines: null,
-                    expands: true,
-                    style: TextStyle(color: primaryText),
-                    decoration: InputDecoration(
-                      border: InputBorder.none,
-                      hintText: 'Write anything—no judgment, just you.',
-                      hintStyle: TextStyle(color: secondaryText),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _isSubmitting ? null : submit,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: buttonColor,
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 16, horizontal: 40),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                      elevation: 4,
-                    ),
-                    child: _isSubmitting
-                        ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2.2,
-                      ),
-                    )
-                        : const Text(
-                      'Continue',
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'How’s your day been so far?',
                       style: TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold),
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: primaryText,
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      height: 110,
+                      child: _moodsFromFirestore.isEmpty
+                          ? const Center(child: CircularProgressIndicator())
+                          : ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _moodsFromFirestore.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 12),
+                        itemBuilder: (context, index) {
+                          final mood = _moodsFromFirestore[index];
+                          final icon = _getMoodIcon(mood);
+                          final selected = selectedMoods.contains(mood);
+                          return GestureDetector(
+                            onTap: () => toggleMood(mood),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              width: 80,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: selected
+                                    ? accentColor.withOpacity(0.2)
+                                    : cardColor,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: selected ? accentColor : Colors.grey.shade300,
+                                  width: selected ? 2 : 1,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.04),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(icon,
+                                      size: 32,
+                                      color: selected ? accentColor : secondaryText),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    mood,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: selected ? accentColor : secondaryText,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Your thoughts & feelings',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: primaryText,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      height: 200,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: cardColor,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.03),
+                            blurRadius: 12,
+                            offset: const Offset(0, 6),
+                          )
+                        ],
+                      ),
+                      child: TextField(
+                        controller: _journalController,
+                        maxLines: null,
+                        expands: true,
+                        style: TextStyle(color: primaryText),
+                        decoration: InputDecoration(
+                          border: InputBorder.none,
+                          hintText: 'Write anything. No judgment, just you.',
+                          hintStyle: TextStyle(color: secondaryText),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _isSubmitting ? null : submit,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: buttonColor,
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 16, horizontal: 40),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                          elevation: 4,
+                        ),
+                        child: _isSubmitting
+                            ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2.2,
+                          ),
+                        )
+                            : const Text(
+                          'Continue',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 80),
+                  ],
                 ),
-              ],
+              ),
             ),
-          ),
+            Positioned(
+              bottom: 50,
+              left: 0,
+              right: 0,
+              child: Text(
+                'You can only submit one entry every 15 minutes.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  fontStyle: FontStyle.italic,
+                  color: Colors.redAccent,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

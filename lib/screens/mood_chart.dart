@@ -1,178 +1,256 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
 
-void main() => runApp(const MaterialApp(home: MoodGraphScreen()));
-
-class MoodData {
-  final String day;
-  final int value;
-  final String mood;
-  const MoodData(this.day, this.value, this.mood);
-}
-
-class MoodGraphScreen extends StatefulWidget {
-  const MoodGraphScreen({super.key});
+class MoodChartScreen extends StatefulWidget {
+  const MoodChartScreen({super.key});
 
   @override
-  State<MoodGraphScreen> createState() => _MoodGraphPageState();
+  State<MoodChartScreen> createState() => _MoodChartScreenState();
 }
 
-class _MoodGraphPageState extends State<MoodGraphScreen> {
-  static const moodDataList = [
-    MoodData("MON", 3, "Calm"),
-    MoodData("TUE", 5, "Happy"),
-    MoodData("WED", 2, "Sad"),
-    MoodData("THU", 4, "Energetic"),
-    MoodData("FRI", 1, "Irritated"),
-    MoodData("SAT", 3, "Calm"),
-    MoodData("SUN", 4, "Happy"),
-  ];
+class _MoodChartScreenState extends State<MoodChartScreen> {
+  late Future<List<_MoodCount>> _moodCountsFuture;
+  String _username = "Friend";
 
-  TooltipBehavior tooltipBehavior = TooltipBehavior(enable: true);
+  final Map<String, IconData> moodIcons = {
+    "Sad": Icons.sentiment_dissatisfied,
+    "Neutral": Icons.sentiment_neutral,
+    "Happy": Icons.sentiment_satisfied,
+    "Very Happy": Icons.sentiment_very_satisfied,
+    "Energetic": Icons.flash_on,
+    "Calm": Icons.self_improvement,
+    "Depressed": Icons.mood_bad,
+    "Apathetic": Icons.remove_circle_outline,
+    "Confused": Icons.help_outline,
+    "Low Energy": Icons.battery_alert,
+    "Frisky": Icons.wb_sunny,
+    "Irritated": Icons.warning,
+    "Anxious": Icons.warning_amber,
+    "Mood Swings": Icons.autorenew,
+    "Feeling Guilty": Icons.sentiment_very_dissatisfied,
+    "Very Self-Critical": Icons.report_problem,
+  };
 
-  // Fun vector-style icons for moods
-  Widget moodIcon(String mood) {
-    Color bg;
-    IconData icon;
+  @override
+  void initState() {
+    super.initState();
+    _moodCountsFuture = fetchAllMoodCounts();
+  }
 
-    switch (mood.toLowerCase()) {
-      case 'happy':
-        bg = Colors.yellow.shade600;
-        icon = Icons.sentiment_satisfied_alt;
-        break;
-      case 'sad':
-        bg = Colors.blue.shade400;
-        icon = Icons.sentiment_dissatisfied;
-        break;
-      case 'energetic':
-        bg = Colors.orange.shade600;
-        icon = Icons.flash_on;
-        break;
-      case 'calm':
-        bg = Colors.teal.shade400;
-        icon = Icons.spa;
-        break;
-      case 'irritated':
-        bg = Colors.red.shade400;
-        icon = Icons.sentiment_very_dissatisfied;
-        break;
-      default:
-        bg = Colors.grey.shade400;
-        icon = Icons.sentiment_neutral;
+  Future<List<_MoodCount>> fetchAllMoodCounts() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return [];
+
+    _username = user.displayName ?? user.email?.split('@').first ?? "Friend";
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .collection('Entries')
+        .orderBy('CreatedAt', descending: false) // fetch all
+        .get();
+
+    if (snapshot.docs.isEmpty) return [];
+
+    final Map<String, int> counts = {};
+
+    for (final doc in snapshot.docs) {
+      final entryMoods = List<String>.from(doc['Moods'] ?? []);
+      for (final mood in entryMoods) {
+        counts[mood] = (counts[mood] ?? 0) + 1;
+      }
     }
 
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: bg,
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: bg.withOpacity(0.5),
-            blurRadius: 6,
-            offset: const Offset(0, 3),
-          ),
-        ],
-        border: Border.all(color: Colors.white, width: 2),
-      ),
-      child: Icon(icon, color: Colors.white, size: 22),
-    );
+    // Convert to list for chart
+    final moodList = counts.entries
+        .map((e) => _MoodCount(mood: e.key, count: e.value))
+        .toList();
+
+    // Sort alphabetically or leave unsorted
+    moodList.sort((a, b) => a.mood.compareTo(b.mood));
+
+    return moodList;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF5B9A8B), Color(0xFFE6C79C)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: const Text("Mood Chart"),
+        backgroundColor: Colors.teal,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
         ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
+      ),
+      body: FutureBuilder<List<_MoodCount>>(
+        future: _moodCountsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (snapshot.hasError) {
+            return Center(child: Text("Error: ${snapshot.error}"));
+          }
+
+          final moods = snapshot.data ?? [];
+
+          if (moods.isEmpty) {
+            return _buildEmptyState();
+          }
+
+          final maxCount =
+          moods.map((e) => e.count).reduce((a, b) => a > b ? a : b);
+
+          return SingleChildScrollView(
             child: Column(
               children: [
+                const SizedBox(height: 16),
                 const Text(
-                  "Weekly Mood Tracker",
+                  "Your Mood Variations",
                   style: TextStyle(
-                    fontSize: 26,
+                    fontSize: 20,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white,
+                    color: Colors.teal,
                   ),
                 ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: Card(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                const SizedBox(height: 16),
+
+                // Mood Line Chart
+                SizedBox(
+                  height: 320,
+                  child: SfCartesianChart(
+                    primaryXAxis: CategoryAxis(
+                      labelRotation: 45,
+                      labelStyle: const TextStyle(
+                          fontWeight: FontWeight.bold, color: Colors.teal),
                     ),
-                    elevation: 8,
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: SfCartesianChart(
-                        tooltipBehavior: tooltipBehavior,
-                        primaryXAxis: CategoryAxis(
-                          labelStyle: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF2D4A42),
-                          ),
+                    primaryYAxis: NumericAxis(
+                      minimum: 0,
+                      maximum: maxCount.toDouble() + 1,
+                      interval: 1,
+                      labelStyle: const TextStyle(
+                        color: Colors.teal,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      majorGridLines:
+                      const MajorGridLines(width: 0.3, color: Colors.teal),
+                    ),
+                    series: <SplineSeries<_MoodCount, String>>[
+                      SplineSeries<_MoodCount, String>(
+                        dataSource: moods,
+                        xValueMapper: (data, _) => data.mood,
+                        yValueMapper: (data, _) => data.count.toDouble(),
+                        color: Colors.teal,
+                        width: 3,
+                        markerSettings: const MarkerSettings(isVisible: false),
+                        dataLabelSettings: DataLabelSettings(
+                          isVisible: true,
+                          builder: (data, point, series, pointIndex, seriesIndex) {
+                            return Icon(
+                              moodIcons[data.mood] ?? Icons.circle,
+                              color: Colors.teal,
+                              size: 24,
+                            );
+                          },
                         ),
-                        primaryYAxis: NumericAxis(
-                          minimum: 0,
-                          maximum: 5,
-                          interval: 1,
-                          labelStyle: const TextStyle(
-                            color: Color(0xFF2D4A42),
+                      ),
+                    ],
+                    plotAreaBorderWidth: 0,
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // Legend
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 20,
+                    runSpacing: 12,
+                    children: moods.map((data) {
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            moodIcons[data.mood] ?? Icons.circle,
+                            color: Colors.teal,
+                            size: 18,
                           ),
-                        ),
-                        series: <LineSeries<MoodData, String>>[
-                          LineSeries<MoodData, String>(
-                            dataSource: moodDataList,
-                            xValueMapper: (MoodData data, _) => data.day,
-                            yValueMapper: (MoodData data, _) => data.value,
-                            color: Colors.deepPurpleAccent,
-                            width: 3,
-                            markerSettings:
-                            const MarkerSettings(isVisible: false),
-                            dataLabelSettings: DataLabelSettings(
-                              isVisible: true,
-                              builder: (data, point, series, pointIndex,
-                                  seriesIndex) {
-                                return moodIcon(
-                                    moodDataList[pointIndex].mood);
-                              },
+                          const SizedBox(width: 6),
+                          Text(
+                            data.mood,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.black87,
                             ),
                           ),
                         ],
+                      );
+                    }).toList(),
+                  ),
+                ),
+
+                const SizedBox(height: 24),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Center(
+                    child: Text(
+                      "🌟 Keep recording your moods! This is your progress. 🎉",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontStyle: FontStyle.italic,
+                        color: Colors.teal,
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.85),
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                  child: const Text(
-                    "Your moods this week have been varied — keep tracking to see patterns and improve emotional balance!",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Color(0xFF2D4A42),
-                    ),
-                  ),
-                )
               ],
             ),
-          ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              "Hey $_username! You don’t have any entries yet.",
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              "Logging your moods helps you track your emotional wellbeing over time. Start recording today!",
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () => Navigator.pushNamed(context, '/dashboard'),
+              child: const Text("Add Entry"),
+            ),
+          ],
         ),
       ),
     );
   }
+}
+
+class _MoodCount {
+  final String mood;
+  final int count;
+  _MoodCount({required this.mood, required this.count});
 }

@@ -159,7 +159,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
                           const SizedBox(width: 10),
 
                           const SizedBox(width: 10),
-                          _buildStatCard("Last Active", lastActive, isDate: true),
+                          _buildStatCard("Last Entry", lastActive, isDate: true),
                         ],
                       ),
 
@@ -203,7 +203,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
                               icon: Icons.edit_note,
                               label: 'New Entry',
                               onTap: () {
-                                Navigator.pushReplacementNamed(context, '/dashboard');
+                                Navigator.pushNamed(context, '/dashboard');
                               },
                             ),
                           ],

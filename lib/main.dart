@@ -8,11 +8,10 @@ import 'screens/login.dart';
 import 'screens/signup.dart';
 import 'screens/complete_profile_screen.dart';
 import 'screens/dashboard.dart';
-import 'screens/recommendation_screen.dart';
 import 'screens/user_dashboard.dart';
-import 'screens/update_profile.dart';
 import 'screens/mood_chart.dart';
 import 'screens/change_password.dart';
+import 'screens/admin_panel.dart';
 
 
 void main() async {
@@ -98,11 +97,12 @@ class MyApp extends StatelessWidget {
             '/login': (context) => const LoginScreen(),
             '/signup': (context) => const SignUpScreen(),
             '/complete-profile': (context) => CompleteProfileScreen(),
-            '/dashboard': (context) => const DashboardScreen(),
+            '/dashboard': (context) =>  DashboardScreen(),
             '/user-screen': (context) => const UserDashboardScreen(),
             '/update-profile': (context) => const UpdateProfileScreen(),
-            '/mood-graph' : (context) => const MoodGraphScreen(),
+            '/mood-graph' : (context) => const MoodChartScreen(),
             '/change-password' : (context) => ChangePasswordScreen(),
+            '/admin-panel' : (context) => const AdminPanelScreen(),
           },
         );
       },
