@@ -165,7 +165,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       final user = userCredential.user;
       if (user == null) throw FirebaseAuthException(code: 'user-null', message: 'User creation failed');
 
-      // Step 2: Store in Firestore (skip FCM for now)
+      // Step 2: Store in Firestore
       await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
         'name': _nameCtrl.text.trim(),
         'email': _emailCtrl.text.trim(),
@@ -175,7 +175,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // Step 3: Show formal success message and redirect to login
+      // Step 3: Show success and redirect
       setState(() {
         _faceState = FaceState.success;
         _errorText = 'Account created! Please login.';
@@ -214,7 +214,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
     _confirmCtrl.dispose();
-    _dobCtrl.dispose(); // dispose DOB controller
+    _dobCtrl.dispose();
     _nameFocus.dispose();
     _emailFocus.dispose();
     _passwordFocus.dispose();
@@ -346,6 +346,30 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         )
                             : const Text('Sign Up'),
                       ),
+                    ),
+                    SizedBox(height: 16.h),
+                    // Already have an account? Login
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          "Already have an account? ",
+                          style: TextStyle(fontSize: 14.sp),
+                        ),
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pushReplacementNamed(context, '/login');
+                          },
+                          child: Text(
+                            "Login",
+                            style: TextStyle(
+                              fontSize: 14.sp,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
