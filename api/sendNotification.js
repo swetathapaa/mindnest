@@ -1,7 +1,7 @@
 const admin = require("firebase-admin");
 
 // Log Firebase Admin SDK version for verification
-console.log("Firebase Admin SDK version:", require("firebase-admin/package.json").version);
+//.log("Firebase Admin SDK version:", require("firebase-admin/package.json").version);
 
 // Initialize Firebase Admin SDK
 let firebaseInitialized = false;
