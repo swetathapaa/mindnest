@@ -1,47 +1,79 @@
 const admin = require("firebase-admin");
-const { getFirestore } = require("firebase-admin/firestore");
 
-let app;
+// Initialize Firebase Admin SDK
+let firebaseInitialized = false;
 try {
+  // Check if Firebase service account environment variable exists
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT environment variable is not set");
+  }
+
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
-  if (!admin.apps.length) {
-    app = admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
+  // Validate required service account fields
+  if (!serviceAccount.project_id || !serviceAccount.private_key || !serviceAccount.client_email) {
+    throw new Error("Invalid service account: missing required fields");
   }
+
+  // Initialize Firebase Admin if not already initialized
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId: serviceAccount.project_id
+    });
+    console.log("Firebase Admin initialized successfully");
+  }
+  
+  firebaseInitialized = true;
 } catch (error) {
-  console.error("Firebase Admin initialization error:", error);
+  console.error("Firebase Admin initialization error:", error.message);
+  firebaseInitialized = false;
 }
 
-const db = getFirestore();
-
 module.exports = async (req, res) => {
+  // Set CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // Check if Firebase was properly initialized
+  if (!firebaseInitialized) {
+    console.error("Firebase Admin not initialized");
+    return res.status(500).json({ 
+      error: "Server configuration error: Firebase not initialized",
+      details: "Please check server logs for Firebase initialization errors"
+    });
+  }
+
   try {
-    const { title, message, userIds } = req.body;
+    const { title, message, tokens } = req.body;
+    
+    console.log('Received notification request:', { title, message, tokenCount: tokens?.length });
 
-    if (!title || !message || !userIds || !Array.isArray(userIds)) {
-      return res.status(400).json({ error: "Missing or invalid fields" });
-    }
-
-    // Get FCM tokens for userIds
-    const tokens = [];
-    for (const userId of userIds) {
-      const userDoc = await db.collection("users").doc(userId).get();
-      if (userDoc.exists && userDoc.data().fcmToken) {
-        tokens.push(userDoc.data().fcmToken);
-      }
+    if (!title || !message || !tokens || !Array.isArray(tokens)) {
+      return res.status(400).json({ error: "Missing or invalid fields. Required: title, message, tokens (array of FCM tokens)" });
     }
 
     if (!tokens.length) {
+      return res.status(400).json({ error: "No FCM tokens provided" });
+    }
+
+    // Validate that tokens are strings and not empty
+    const validTokens = tokens.filter(token => typeof token === 'string' && token.trim().length > 0);
+    
+    if (!validTokens.length) {
       return res.status(400).json({ error: "No valid FCM tokens found" });
     }
 
-    const messages = tokens.map((token) => ({
+    const messages = validTokens.map((token) => ({
       notification: { title, body: message },
       token,
     }));
