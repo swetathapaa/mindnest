@@ -1,35 +1,46 @@
-import admin from "firebase-admin";
+// api/sendNotification.js
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-    }),
-  });
+const admin = require("firebase-admin");
+
+let app;
+try {
+  // Parse service account JSON from Vercel Environment Variable
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+  if (!admin.apps.length) {
+    app = admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+  }
+} catch (error) {
+  console.error("Firebase Admin initialization error:", error);
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
-
-  const { title, message, userIds } = req.body;
+module.exports = async (req, res) => {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
-    const tokens = [];
-    for (let uid of userIds) {
-      const snap = await admin.firestore().collection("Users").doc(uid).get();
-      if (snap.exists && snap.data().fcmToken) tokens.push(snap.data().fcmToken);
+    const { title, body, token } = req.body;
+
+    if (!title || !body || !token) {
+      return res.status(400).json({ error: "Missing fields" });
     }
 
-    if (tokens.length === 0) return res.status(400).json({ error: "No tokens found" });
+    const message = {
+      notification: {
+        title,
+        body,
+      },
+      token,
+    };
 
-    const payload = { notification: { title, body: message } };
-    await admin.messaging().sendToDevice(tokens, payload);
+    const response = await admin.messaging().send(message);
 
-    return res.status(200).json({ success: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: err.message });
+    return res.status(200).json({ success: true, response });
+  } catch (error) {
+    console.error("Error sending notification:", error);
+    return res.status(500).json({ error: error.message });
   }
-}
+};
