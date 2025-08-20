@@ -1,5 +1,8 @@
 const admin = require("firebase-admin");
 
+// Log Firebase Admin SDK version for verification
+console.log("Firebase Admin SDK version:", require("firebase-admin/package.json").version);
+
 // Initialize Firebase Admin SDK
 let firebaseInitialized = false;
 
@@ -68,9 +71,10 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: "No valid FCM tokens found" });
     }
 
+    // Send notification to multiple tokens
     const response = await admin.messaging().sendMulticast({
       tokens: validTokens,
-      notification: { title, body: message }
+      notification: { title, body: message },
     });
 
     return res.status(200).json({ success: true, response });
