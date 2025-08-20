@@ -3,17 +3,33 @@ const admin = require("firebase-admin");
 // Initialize Firebase Admin SDK
 let firebaseInitialized = false;
 try {
-  // Check if Firebase service account environment variable exists
-  if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-    throw new Error("FIREBASE_SERVICE_ACCOUNT environment variable is not set");
+  let serviceAccount;
+  
+  // Try multiple environment variable formats
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    } catch (parseError) {
+      console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT:", parseError.message);
+      throw new Error("FIREBASE_SERVICE_ACCOUNT is not valid JSON");
+    }
+  } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+    // Alternative: separate environment variables
+    serviceAccount = {
+      project_id: process.env.FIREBASE_PROJECT_ID,
+      private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      client_email: process.env.FIREBASE_CLIENT_EMAIL
+    };
+  } else {
+    throw new Error("Firebase credentials not found. Set FIREBASE_SERVICE_ACCOUNT or individual Firebase environment variables");
   }
-
-  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
   // Validate required service account fields
   if (!serviceAccount.project_id || !serviceAccount.private_key || !serviceAccount.client_email) {
-    throw new Error("Invalid service account: missing required fields");
+    throw new Error("Invalid service account: missing required fields (project_id, private_key, client_email)");
   }
+
+  console.log("Initializing Firebase Admin with project:", serviceAccount.project_id);
 
   // Initialize Firebase Admin if not already initialized
   if (!admin.apps.length) {
@@ -27,6 +43,7 @@ try {
   firebaseInitialized = true;
 } catch (error) {
   console.error("Firebase Admin initialization error:", error.message);
+  console.error("Available env vars:", Object.keys(process.env).filter(key => key.includes('FIREBASE')));
   firebaseInitialized = false;
 }
 
