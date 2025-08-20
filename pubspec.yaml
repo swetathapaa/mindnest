@@ -12,6 +12,8 @@ dependencies:
     sdk: flutter
 
   # Icons and media
+
+
   cupertino_icons: ^1.0.8
   cached_network_image: ^3.3.1
   flutter_screenutil: ^5.9.0
@@ -35,6 +37,7 @@ dependencies:
   intl: ^0.20.2
   syncfusion_flutter_charts: ^30.2.5
   font_awesome_flutter: ^10.4.0
+  fluttertoast: ^8.2.1
 
 
 

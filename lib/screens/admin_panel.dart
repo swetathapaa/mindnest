@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class AdminPanelScreen extends StatefulWidget {
   const AdminPanelScreen({super.key});
@@ -44,6 +46,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
     if (_titleCtrl.text.isEmpty || _messageCtrl.text.isEmpty) return;
 
     setState(() => _isSending = true);
+
     try {
       List<String> userIds = sendToAll
           ? (await _firestore.collection('Users').where('userType', isEqualTo: 'general').get())
@@ -52,22 +55,37 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
           .toList()
           : selectedUserIds;
 
-      for (String uid in userIds) {
-        await _firestore
-            .collection('Users')
-            .doc(uid)
-            .collection('notifications')
-            .add({
+      final url = Uri.parse(
+          'https://mindnest-38ppkhbrv-swetas-projects-c41a7a8d.vercel.app/api/sendNotification');
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
           'title': _titleCtrl.text.trim(),
           'message': _messageCtrl.text.trim(),
-          'sentAt': DateTime.now(),
-          'read': false,
-        });
+          'userIds': userIds,
+        }),
+      );
+
+      try {
+        final data = jsonDecode(response.body);
+        if (response.statusCode == 200) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Notification sent successfully!')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed: ${data['error'] ?? response.body}')),
+          );
+        }
+      } catch (e) {
+        // Handle HTML or unexpected responses
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send notification. Response was not JSON.')),
+        );
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Notification sent successfully!')),
-      );
       _titleCtrl.clear();
       _messageCtrl.clear();
       setState(() {
@@ -382,7 +400,6 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ------------------ Stats Cards ------------------
             FutureBuilder<List<int>>(
               future: Future.wait([_getTotalUsers(), _getTotalEntries(), _getTotalMoods()]),
               builder: (context, snapshot) {
@@ -400,7 +417,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               },
             ),
             SizedBox(height: 16.h),
-            // ------------------ User Management ------------------
+
+            // User Management
             ExpansionTile(
               title: const Text('User Management', style: TextStyle(fontWeight: FontWeight.bold)),
               children: [
@@ -416,8 +434,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                   onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 8),
-                if (_searchCtrl.text.isNotEmpty)
-                  _buildUserList(searchName: _searchCtrl.text),
+                if (_searchCtrl.text.isNotEmpty) _buildUserList(searchName: _searchCtrl.text),
                 const SizedBox(height: 8),
                 TextButton(
                   onPressed: () => setState(() => showExistingUsers = !showExistingUsers),
@@ -426,8 +443,9 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                 if (showExistingUsers) _buildUserList(),
               ],
             ),
-            const SizedBox(height: 16),
-            // ------------------ Mood Management ------------------
+
+            SizedBox(height: 16),
+            // Mood Management
             ExpansionTile(
               title: const Text('Mood Management', style: TextStyle(fontWeight: FontWeight.bold)),
               children: [
@@ -460,8 +478,9 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                 if (showExistingMoods) _buildMoodList(),
               ],
             ),
-            const SizedBox(height: 16),
-            // ------------------ Notifications ------------------
+
+            SizedBox(height: 16),
+            // Notifications
             ExpansionTile(
               title: const Text('Notifications', style: TextStyle(fontWeight: FontWeight.bold)),
               children: [
@@ -508,7 +527,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: _isSending ? null : _sendNotification,
-                    style: ElevatedButton.styleFrom(backgroundColor: primary, padding: EdgeInsets.symmetric(vertical: 14.h)),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: primary, padding: EdgeInsets.symmetric(vertical: 14.h)),
                     child: _isSending
                         ? const CircularProgressIndicator(color: Colors.white)
                         : const Text('Send Notification', style: TextStyle(color: Colors.white)),

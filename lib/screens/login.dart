@@ -7,6 +7,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'recommendation_screen.dart';
 import 'dashboard.dart';
+import 'admin_panel.dart'; // Make sure this exists
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -86,6 +87,21 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _redirectAfterLogin(String userId) async {
+    final userDoc = await _firestore.collection('Users').doc(userId).get();
+    if (!userDoc.exists) return;
+
+    final userType = userDoc['userType'] ?? 'general';
+
+    if (userType == 'admin') {
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => AdminPanelScreen()),
+      );
+      return;
+    }
+
+    // For general users: check latest entry
     final entryRef = _firestore
         .collection('Users')
         .doc(userId)
@@ -94,24 +110,26 @@ class _LoginScreenState extends State<LoginScreen> {
         .limit(1);
 
     final snapshot = await entryRef.get();
-    String? latestEntryId;
+
     if (snapshot.docs.isNotEmpty) {
       final lastEntry = snapshot.docs.first;
-      latestEntryId = lastEntry.id;
       final createdAt = lastEntry['createdAt'].toDate();
       final difference = DateTime.now().difference(createdAt);
 
       if (difference.inMinutes < 15) {
+        if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => RecommendationScreen(entryId: latestEntryId ?? ''),
+            builder: (_) => RecommendationScreen(entryId: lastEntry.id),
           ),
         );
         return;
       }
     }
 
+    // Default dashboard for general users
+    if (!mounted) return;
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => DashboardScreen()),
@@ -122,7 +140,6 @@ class _LoginScreenState extends State<LoginScreen> {
     final isValid = _formKey.currentState!.validate();
 
     if (!isValid) {
-      // Show error emoji if validation fails
       setState(() => _faceState = FaceState.error);
       return;
     }

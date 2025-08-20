@@ -13,6 +13,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.1.0",
-    "openai": "^5.11.0"
+    "openai": "^5.11.0",
+    "firebase-admin": "^11.12.0"
   }
 }
