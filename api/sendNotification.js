@@ -1,30 +1,35 @@
+import admin from "firebase-admin";
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    }),
+  });
+}
+
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).end();
+  if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
 
-  const { token, title, body } = req.body;
-
-  if (!token || !title || !body) {
-    return res.status(400).json({ error: "Missing fields" });
-  }
-
-  const fcmKey = process.env.FCM_SERVER_KEY; // we will set this in Vercel
+  const { title, message, userIds } = req.body;
 
   try {
-    const response = await fetch("https://fcm.googleapis.com/fcm/send", {
-      method: "POST",
-      headers: {
-        "Authorization": `key=${fcmKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        to: token,
-        notification: { title, body },
-      }),
-    });
+    const tokens = [];
+    for (let uid of userIds) {
+      const snap = await admin.firestore().collection("Users").doc(uid).get();
+      if (snap.exists && snap.data().fcmToken) tokens.push(snap.data().fcmToken);
+    }
 
-    const data = await response.json();
-    res.status(200).json(data);
+    if (tokens.length === 0) return res.status(400).json({ error: "No tokens found" });
+
+    const payload = { notification: { title, body: message } };
+    await admin.messaging().sendToDevice(tokens, payload);
+
+    return res.status(200).json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    return res.status(500).json({ error: err.message });
   }
 }
