@@ -68,12 +68,10 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: "No valid FCM tokens found" });
     }
 
-    const messages = validTokens.map((token) => ({
-      notification: { title, body: message },
-      token,
-    }));
-
-    const response = await admin.messaging().sendAll(messages);
+    const response = await admin.messaging().sendMulticast({
+      tokens: validTokens,
+      notification: { title, body: message }
+    });
 
     return res.status(200).json({ success: true, response });
   } catch (error) {
