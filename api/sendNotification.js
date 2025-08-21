@@ -1,3 +1,6 @@
+require("dotenv").config();
+console.log("Loaded FIREBASE_SERVICE_ACCOUNT:", !!process.env.FIREBASE_SERVICE_ACCOUNT);
+
 const admin = require("firebase-admin");
 
 // Log Firebase Admin SDK version for verification
