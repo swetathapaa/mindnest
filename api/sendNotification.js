@@ -1,12 +1,7 @@
 require("dotenv").config();
-console.log("Loaded FIREBASE_SERVICE_ACCOUNT:", !!process.env.FIREBASE_SERVICE_ACCOUNT);
-
 const admin = require("firebase-admin");
 
-// Log Firebase Admin SDK version for verification
-//.log("Firebase Admin SDK version:", require("firebase-admin/package.json").version);
-
-// Initialize Firebase Admin SDK
+// Initialize Firebase Admin
 let firebaseInitialized = false;
 
 try {
@@ -20,8 +15,6 @@ try {
     throw new Error("Invalid service account JSON: missing required fields");
   }
 
-  console.log("Initializing Firebase Admin with project:", serviceAccount.project_id);
-
   if (!admin.apps.length) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
@@ -30,10 +23,19 @@ try {
   }
 
   firebaseInitialized = true;
-} catch (error) {
-  console.error("❌ Firebase Admin initialization error:", error.message);
+} catch (err) {
+  console.error("❌ Firebase Admin initialization error:", err.message);
   firebaseInitialized = false;
 }
+
+// Debug endpoint (optional)
+const debug = (req, res) => {
+  res.status(200).json({
+    firebaseAdminVersion: admin.SDK_VERSION,
+    messagingMethods: firebaseInitialized ? Object.keys(admin.messaging()) : [],
+    firebaseInitialized,
+  });
+};
 
 module.exports = async (req, res) => {
   // CORS headers
@@ -41,9 +43,9 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
+
+  if (req.method === "GET") return debug(req, res); // GET to check version/debug
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -61,20 +63,15 @@ module.exports = async (req, res) => {
 
     if (!title || !message || !tokens || !Array.isArray(tokens)) {
       return res.status(400).json({
-        error:
-          "Missing or invalid fields. Required: title, message, tokens (array of FCM tokens)",
+        error: "Missing or invalid fields. Required: title, message, tokens (array of FCM tokens)",
       });
     }
 
-    const validTokens = tokens.filter(
-      (t) => typeof t === "string" && t.trim().length > 0
-    );
+    const validTokens = tokens.filter((t) => typeof t === "string" && t.trim());
 
-    if (!validTokens.length) {
-      return res.status(400).json({ error: "No valid FCM tokens found" });
-    }
+    if (!validTokens.length) return res.status(400).json({ error: "No valid FCM tokens found" });
 
-    // Send notification to multiple tokens
+    // Send notification
     const response = await admin.messaging().sendMulticast({
       tokens: validTokens,
       notification: { title, body: message },
