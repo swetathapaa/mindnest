@@ -29,6 +29,15 @@ try {
   firebaseInitialized = false;
 }
 
+// Helper function to batch tokens in chunks of 500
+const chunkArray = (array, size = 500) => {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+};
+
 // Debug function for GET requests
 const debug = (req, res) => {
   try {
@@ -50,12 +59,8 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(200).end();
-
   if (req.method === "GET") return debug(req, res);
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   if (!firebaseInitialized) {
     return res.status(500).json({
@@ -74,18 +79,21 @@ module.exports = async (req, res) => {
     }
 
     const validTokens = tokens.filter((t) => typeof t === "string" && t.trim());
-
     if (!validTokens.length) return res.status(400).json({ error: "No valid FCM tokens found" });
 
-    // Use getMessaging() for new SDK
     const messaging = getMessaging();
+    const chunks = chunkArray(validTokens, 500);
 
-    const response = await messaging.sendMulticast({
-      tokens: validTokens,
-      notification: { title, body: message },
-    });
+    const results = [];
+    for (const chunk of chunks) {
+      const response = await messaging.sendMulticast({
+        tokens: chunk,
+        notification: { title, body: message },
+      });
+      results.push(response);
+    }
 
-    return res.status(200).json({ success: true, response });
+    return res.status(200).json({ success: true, results });
   } catch (error) {
     console.error("Error sending notification:", error);
     return res.status(500).json({ error: error.message });
