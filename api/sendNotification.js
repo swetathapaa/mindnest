@@ -19,8 +19,6 @@ try {
   if (!admin.apps.length) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
-      // Optional: databaseURL if needed
-      // databaseURL: "https://your-project-id.firebaseio.com"
     });
     console.log("✅ Firebase Admin initialized successfully");
   }
@@ -52,7 +50,7 @@ module.exports = async (req, res) => {
   if (!firebaseInitialized) {
     return res.status(500).json({
       error: "Server configuration error: Firebase not initialized",
-      details: "Check Vercel logs for Firebase initialization errors",
+      details: "Check logs for Firebase initialization errors",
     });
   }
 
@@ -65,26 +63,28 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Step 1: Fetch FCM tokens from Firestore using document IDs
-    const tokens = [];
     const db = admin.firestore();
+    const tokens = [];
 
-    for (const uid of userIds) {
-      const doc = await db.collection("Users").doc(uid).get();
-      if (doc.exists && doc.data().fcmToken) {
-        tokens.push(doc.data().fcmToken);
-      }
-    }
+    // Fetch FCM tokens for all user document IDs
+    await Promise.all(
+      userIds.map(async (uid) => {
+        const doc = await db.collection("Users").doc(uid).get();
+        if (doc.exists && doc.data()?.fcmToken) {
+          tokens.push(doc.data().fcmToken);
+        }
+      })
+    );
 
     if (!tokens.length) {
       return res.status(400).json({ error: "No valid FCM tokens found for the selected users." });
     }
 
-    // Step 2: Send notifications in chunks of 500
     const messaging = getMessaging();
     const chunks = chunkArray(tokens, 500);
     const results = [];
 
+    // Send notifications in batches
     for (const chunk of chunks) {
       const response = await messaging.sendEachForMulticast({
         tokens: chunk,
