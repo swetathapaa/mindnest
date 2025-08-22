@@ -19,6 +19,8 @@ try {
   if (!admin.apps.length) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
+      // Optional: databaseURL if needed
+      // databaseURL: "https://your-project-id.firebaseio.com"
     });
     console.log("✅ Firebase Admin initialized successfully");
   }
@@ -38,20 +40,6 @@ const chunkArray = (array, size = 500) => {
   return chunks;
 };
 
-// Debug function for GET requests
-const debug = (req, res) => {
-  try {
-    const messaging = getMessaging();
-    res.status(200).json({
-      firebaseAdminVersion: admin.SDK_VERSION,
-      messagingMethods: Object.keys(messaging),
-      firebaseInitialized,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
 module.exports = async (req, res) => {
   // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -59,7 +47,6 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method === "GET") return debug(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   if (!firebaseInitialized) {
@@ -70,21 +57,34 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const { title, message, tokens } = req.body;
+    const { title, message, userIds } = req.body;
 
-    if (!title || !message || !tokens || !Array.isArray(tokens)) {
+    if (!title || !message || !userIds || !Array.isArray(userIds)) {
       return res.status(400).json({
-        error: "Missing or invalid fields. Required: title, message, tokens (array of FCM tokens)",
+        error: "Missing or invalid fields. Required: title, message, userIds (array of document IDs)",
       });
     }
 
-    const validTokens = tokens.filter((t) => typeof t === "string" && t.trim());
-    if (!validTokens.length) return res.status(400).json({ error: "No valid FCM tokens found" });
+    // Step 1: Fetch FCM tokens from Firestore using document IDs
+    const tokens = [];
+    const db = admin.firestore();
 
+    for (const uid of userIds) {
+      const doc = await db.collection("Users").doc(uid).get();
+      if (doc.exists && doc.data().fcmToken) {
+        tokens.push(doc.data().fcmToken);
+      }
+    }
+
+    if (!tokens.length) {
+      return res.status(400).json({ error: "No valid FCM tokens found for the selected users." });
+    }
+
+    // Step 2: Send notifications in chunks of 500
     const messaging = getMessaging();
-    const chunks = chunkArray(validTokens, 500);
-
+    const chunks = chunkArray(tokens, 500);
     const results = [];
+
     for (const chunk of chunks) {
       const response = await messaging.sendEachForMulticast({
         tokens: chunk,
