@@ -86,7 +86,7 @@ module.exports = async (req, res) => {
 
     const results = [];
     for (const chunk of chunks) {
-      const response = await messaging.sendMulticast({
+      const response = await messaging.sendEachForMulticast({
         tokens: chunk,
         notification: { title, body: message },
       });
